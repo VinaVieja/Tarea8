@@ -8,54 +8,67 @@ use Ratchet\ConnectionInterface;
 class WebSocketServer implements MessageComponentInterface
 {
     protected $clients;
-    protected $pdo;  // Conexión PDO a BD
+    protected $pdo; // PDO opcional
 
-    public function __construct($pdo)
+    public function __construct($pdo = null)
     {
         $this->clients = new \SplObjectStorage;
-        $this->pdo = $pdo;
+        if ($pdo instanceof \PDO) {
+            $this->pdo = $pdo;
+        } else {
+            $this->pdo = null;
+        }
     }
 
     public function onOpen(ConnectionInterface $conn)
     {
         $this->clients->attach($conn);
         echo "Nueva conexión: {$conn->resourceId}\n";
-        $conn->send(json_encode(['type' => 'system', 'message' => 'Bienvenido al chat!']));
+
+        // Mensaje de bienvenida opcional solo al cliente nuevo
+        $welcome = json_encode(['system' => 'Conectado al servidor WebSocket.']);
+        $conn->send($welcome);
     }
 
     public function onMessage(ConnectionInterface $from, $msg)
     {
-        try {
-            $data = json_decode($msg, true);
-            if ($data['type'] === 'message') {
-                $username = $data['username'] ?? 'Anónimo';
-                $message = $data['message'] ?? '';
-                $averiaId = $data['averia_id'] ?? null;
-                $timestamp = date('Y-m-d H:i:s');
+        // Seguridad: intentar decodificar JSON y validar
+        $data = json_decode($msg, true);
+        if (!is_array($data)) {
+            // si no es JSON, ignorar o enviar error
+            $from->send(json_encode(['system' => 'Formato de mensaje no válido. Use JSON.']));
+            return;
+        }
 
-                // Solo guarda en BD si hay averia_id (chat específico)
-                if ($averiaId) {
-                    $stmt = $this->pdo->prepare("INSERT INTO mensajes (averia_id, username, message, created_at) VALUES (?, ?, ?, ?)");
-                    $stmt->execute([$averiaId, $username, $message, $timestamp]);
-                } else {
-                    // Para chat público, no guardar en BD, solo transmitir
-                    echo "Mensaje público recibido: {$username}: {$message}\n";
-                }
+        $user = isset($data['user']) ? trim($data['user']) : 'Anon';
+        $text = isset($data['msg']) ? trim($data['msg']) : '';
 
-                // Envía a todos los clientes conectados
-                foreach ($this->clients as $client) {
-                    $client->send(json_encode([
-                        'type' => 'message',
-                        'username' => $username,
-                        'message' => $message,
-                        'timestamp' => $timestamp,
-                        'averia_id' => $averiaId,
-                    ]));
-                }
+        if ($text === '') {
+            $from->send(json_encode(['system' => 'Mensaje vacío no enviado.']));
+            return;
+        }
+
+        // Guardar en BD si está disponible (opcional)
+        if ($this->pdo instanceof \PDO) {
+            try {
+                $stmt = $this->pdo->prepare("INSERT INTO mensajes (usuario, mensaje, creado_en) VALUES (:u, :m, NOW())");
+                $stmt->execute([':u' => $user, ':m' => $text]);
+            } catch (\Exception $e) {
+                // No detener el flujo por errores de BD; loguear
+                echo "Error guardando mensaje en BD: " . $e->getMessage() . "\n";
             }
-        } catch (\Exception $e) {
-            echo "Error procesando mensaje: {$e->getMessage()}\n";
-            $from->send(json_encode(['type' => 'system', 'message' => 'Error interno.']));
+        }
+
+        // Preparar payload para enviar a todos los clientes (broadcast)
+        $payload = json_encode([
+            'user' => $user,
+            'msg'  => $text,
+            'time' => date('Y-m-d H:i:s')
+        ]);
+
+        foreach ($this->clients as $client) {
+            // enviar a todos (incluyendo el remitente) — si quieres excluir al remitente, compara $from !== $client
+            $client->send($payload);
         }
     }
 

@@ -1,8 +1,8 @@
 <?php
-$config = require __DIR__ . '/config/db.php';
+$config = require __DIR__ . '/ws-config.php';
 
 try {
-    $dsn = "mysql:host={$config['host']};dbname={$config['database']};port={$config['port']};charset=utf8";
+    $dsn = "mysql:host={$config['host']};dbname={$config['database']};port={$config['port']};charset=utf8mb4";
     $pdo = new PDO($dsn, $config['username'], $config['password']);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     echo "Conexión a BD exitosa.\n";
@@ -20,7 +20,7 @@ use Ratchet\WebSocket\WsServer;
 $server = IoServer::factory(
     new HttpServer(
         new WsServer(
-            new WebSocketServer($pdo) 
+            new WebSocketServer($pdo)
         )
     ),
     8080
